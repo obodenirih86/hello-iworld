@@ -1,0 +1,42 @@
+name: render-deploy
+on: [workflow_dispatch]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: deploy static site to Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          REPO: https://github.com/obodenirih86/hello-iworld
+          NAME: hello-iworld-st02
+        run: |
+          set -e
+          auth=(-H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json")
+          OID=$(curl -sf "${auth[@]}" https://api.render.com/v1/owners | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["owner"]["id"])')
+          echo "owner=$OID"
+          SID=$(curl -sf "${auth[@]}" 'https://api.render.com/v1/services?limit=100' | python3 -c "import sys,json; ss=json.load(sys.stdin); print(next((s['service']['id'] for s in ss if s['service']['name']=='$NAME'),''))")
+          if [ -z "$SID" ]; then
+            echo "создаём static-сервис из публичного репо"
+            CODE=$(curl -s -o /tmp/c.json -w '%{http_code}' -X POST "${auth[@]}" \
+              -d "{\"type\":\"static_site\",\"name\":\"$NAME\",\"ownerId\":\"$OID\",\"repo\":\"$REPO\",\"branch\":\"main\",\"publishPath\":\".\",\"autoDeploy\":\"yes\"}" \
+              https://api.render.com/v1/services)
+            echo "create -> HTTP $CODE"; cat /tmp/c.json; echo
+            case "$CODE" in 200|201) ;; *) echo "создание не удалось"; exit 1;; esac
+            SID=$(python3 -c 'import json;print(json.load(open("/tmp/c.json"))["service"]["id"])')
+          else
+            echo "сервис существует"
+          fi
+          curl -s -o /tmp/p.json -w 'patch publishPath -> HTTP %{http_code}\n' -X PATCH "${auth[@]}" -d '{"publishPath":"."}' "https://api.render.com/v1/services/$SID"
+          echo "триггерим деплой"
+          curl -sf "${auth[@]}" -X POST "https://api.render.com/v1/services/$SID/deploys" -d '{"clearCache":"do_not_clear"}' >/dev/null
+          URL=$(curl -sf "${auth[@]}" "https://api.render.com/v1/services/$SID" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('serviceDetails') or {}).get('url',''))")
+          echo "service=$SID url=$URL"
+          ok=0
+          for i in $(seq 1 24); do
+            code=$(curl -sL -o /tmp/s.html -w '%{http_code}' --max-time 20 "$URL" || echo 000)
+            echo "попытка $i: HTTP $code"
+            if [ "$code" = 200 ]; then ok=1; break; fi
+            sleep 15
+          done
+          grep -o '<h1>[^<]*</h1>' /tmp/s.html || true
+          if [ "$ok" = 1 ]; then echo "RENDER_DEPLOY_SUCCESS $URL"; else echo "RENDER_DEPLOY_FAILED"; exit 1; fi

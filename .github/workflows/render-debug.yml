@@ -1,0 +1,15 @@
+name: render-debug
+on: [workflow_dispatch]
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: inspect service and deploys
+        env:
+          RK: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          SID=srv-db2gn3flk1mc73bc49g0
+          echo "== сервис:"
+          curl -s -H "Authorization: Bearer $RK" "https://api.render.com/v1/services/$SID" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("publishPath:", d["serviceDetails"].get("publishPath"), "| repo:", d.get("repo"), "| branch:", d.get("branch"))'
+          echo "== деплои:"
+          curl -s -H "Authorization: Bearer $RK" "https://api.render.com/v1/services/$SID/deploys?limit=5" | python3 -c 'import sys,json; [print(x.get("deploy",{}).get("id","")[:12],"|",x.get("deploy",{}).get("status")) for x in json.load(sys.stdin)]'
